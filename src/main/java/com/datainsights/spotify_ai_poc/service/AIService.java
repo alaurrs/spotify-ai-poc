@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 @Service
@@ -44,13 +45,33 @@ public class AIService {
         );
     }
 
+    private static final Map<String, List<String>> TABLE_KEYWORDS = Map.of(
+        "artists", List.of("artiste", "chanteur", "groupe", "interprète"),
+        "tracks", List.of("chanson", "titre", "morceau", "musique", "track"),
+        "listening_history", List.of("écoute", "écouté", "écoutés", "écouter", "historique", "écoutées", "écoutée", "écoutant")
+    );
+
     private String getRelevantSchema(String question) {
-        SearchRequest request = SearchRequest.builder().query(question).topK(2).build();
-        List<Document> similarDocuments = this.vectorStore.similaritySearch(request);
-        return similarDocuments.stream()
-                .map(doc -> tableDefinitions.get(doc.getMetadata().get("tableName").toString()))
+        String lowerQuestion = question.toLowerCase();
+        // Recherche des tables les plus pertinentes selon les mots-clés
+        List<String> relevantTables = TABLE_KEYWORDS.entrySet().stream()
+            .filter(e -> e.getValue().stream().anyMatch(lowerQuestion::contains))
+            .map(Map.Entry::getKey)
+            .toList();
+        // Si aucune table trouvée par mots-clés, fallback sur la recherche vectorielle
+        if (relevantTables.isEmpty()) {
+            SearchRequest request = SearchRequest.builder().query(question).topK(2).build();
+            List<Document> similarDocuments = this.vectorStore.similaritySearch(request);
+            relevantTables = similarDocuments.stream()
+                .map(doc -> doc.getMetadata().get("tableName").toString())
                 .distinct()
-                .collect(Collectors.joining("\n"));
+                .toList();
+        }
+        return relevantTables.stream()
+            .map(tableDefinitions::get)
+            .filter(Objects::nonNull)
+            .distinct()
+            .collect(Collectors.joining("\n"));
     }
 
     public String getInsight(String question, String userId) {
@@ -62,6 +83,7 @@ public class AIService {
             Règles impératives :
             - Le schéma de base de données à utiliser est le suivant : %s
             - La requête doit concerner l'utilisateur avec l'UUID : '%s'
+            - Si la question concerne l'historique d'écoute, tu dois OBLIGATOIREMENT utiliser la table 'listening_history' (et faire les jointures nécessaires pour obtenir les titres, artistes, etc.).
             - Ta réponse DOIT contenir uniquement la requête SQL.
             - Ne fournis AUCUNE explication, AUCUN commentaire, et AUCUN texte ou formatage Markdown (comme ```) avant ou après la requête.
             
